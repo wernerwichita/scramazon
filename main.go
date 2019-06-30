@@ -8,12 +8,11 @@ import (
 	"time"
 
 	"github.com/gocolly/colly"
-
 	"github.com/gocolly/colly/extensions"
 )
 
 func main() {
-	amazonItemLookup("B00TU3BTUI")
+	amazonItemLookup("B07QDNZ1V2")
 }
 
 type amazonBook struct {
@@ -21,6 +20,7 @@ type amazonBook struct {
 	Title         string
 	Author        string
 	CoverImageURL string
+	Rating        float32
 	KindlePrice   float32
 	HardPrice     float32
 	PaperPrice    float32
@@ -30,10 +30,12 @@ var amazonRequestChannel chan string
 var amazonBookResultChannel chan amazonBook
 
 var rxPrice = regexp.MustCompile(`\$(\d+(\.\d+)?)`)
+var rxRating = regexp.MustCompile(`([\d.]+) `)
 
 func amazonItemLookup(ASIN string) (*amazonBook, error) {
 
 	book := &amazonBook{}
+	var err error
 
 	c := colly.NewCollector(
 		colly.Async(true),
@@ -47,9 +49,26 @@ func amazonItemLookup(ASIN string) (*amazonBook, error) {
 	extensions.RandomUserAgent(c)
 
 	c.OnHTML("#dp-container", func(e *colly.HTMLElement) {
-		book.Title = e.ChildText("#title span")
+		book.Title = e.ChildText("#title .a-size-extra-large")
 		book.Author = e.ChildText(".contributorNameID")
+		book.ASIN = e.ChildAttr(".contributorNameID", "data-asin")
 		book.CoverImageURL = e.ChildAttr(".frontImage", "src")
+
+		ratingmatch := rxRating.FindStringSubmatch(e.ChildText(".a-icon .a-icon-alt"))
+		if len(ratingmatch) > 1 {
+			rating, err := strconv.ParseFloat(ratingmatch[1], 32)
+			if err == nil {
+				book.Rating = float32(rating)
+			}
+		}
+
+		kindlematch := rxPrice.FindStringSubmatch(e.ChildText(".kindle-price .a-color-price"))
+		if len(kindlematch) > 1 {
+			kindleprice, err := strconv.ParseFloat(kindlematch[1], 32)
+			if err == nil {
+				book.KindlePrice = float32(kindleprice)
+			}
+		}
 
 		e.ForEach(".swatchElement", func(_ int, x *colly.HTMLElement) {
 			//type of media (kindle, hardcover, paperback, audiobook, etc)
@@ -69,7 +88,9 @@ func amazonItemLookup(ASIN string) (*amazonBook, error) {
 				if err == nil {
 					switch mediastring {
 					case "Kindle":
-						book.KindlePrice = float32(price)
+						if price > 0 {
+							book.KindlePrice = float32(price)
+						}
 
 					case "Hardcover":
 						book.HardPrice = float32(price)
@@ -84,7 +105,8 @@ func amazonItemLookup(ASIN string) (*amazonBook, error) {
 	})
 
 	// Set error handler
-	c.OnError(func(r *colly.Response, err error) {
+	c.OnError(func(r *colly.Response, e error) {
+		err = e
 		fmt.Println("Request URL:", r.Request.URL, "failed with response:", r, "\nError:", err)
 	})
 
@@ -92,5 +114,5 @@ func amazonItemLookup(ASIN string) (*amazonBook, error) {
 
 	c.Wait()
 
-	return book, nil
+	return book, err
 }
